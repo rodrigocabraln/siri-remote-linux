@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "siri-remote-linux"
+version = "0.1.0"
+description = "Apple Siri Remote A2540 como teclado Linux mediante BlueZ y uinput"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+[project.scripts]
+siri-remote = "siri_remote_linux.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["siri_remote_linux*"]

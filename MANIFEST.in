@@ -1,0 +1,2 @@
+include LICENSE README.md config.env.example siri-remote
+recursive-include udev *.rules
