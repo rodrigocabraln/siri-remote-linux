@@ -49,6 +49,9 @@ class ConfigurationTests(unittest.TestCase):
                      "REPEAT_INTERVAL_MS=2", "VOLUME_REPEAT_INTERVAL_MS=2"):
             with self.subTest(text=text), self.assertRaises(ValueError): parse_settings(text)
 
+    def test_volume_repeat_interval_allows_five_ms(self):
+        self.assertEqual(parse_settings("VOLUME_REPEAT_INTERVAL_MS=5").volume_repeat_interval_ms, 5)
+
     def test_invalid_enum_boolean_unknown_and_duplicate(self):
         for text in ("TOUCH_MODE=fast", "TOUCH_INVERT_Y=maybe", "TYPO=1", "TOUCH_STEP=5\nTOUCH_STEP=6"):
             with self.subTest(text=text), self.assertRaises(ValueError): parse_settings(text)

@@ -100,7 +100,7 @@ NUMBERS = {
     "DOUBLE_CLICK_MS": (int, 0, 2000),
     "BUTTON_DEBOUNCE_MS": (int, 0, 2000), "LONG_PRESS_MS": (int, 100, 5000),
     "REPEAT_DELAY_MS": (int, 100, 5000), "REPEAT_INTERVAL_MS": (int, 30, 2000),
-    "VOLUME_REPEAT_INTERVAL_MS": (int, 30, 2000),
+    "VOLUME_REPEAT_INTERVAL_MS": (int, 5, 2000),
     "TOUCH_STEP": (float, 1, 100), "TOUCH_INTERVAL_MS": (int, 0, 2000),
     "TOUCH_SETTLE_MS": (int, 0, 1000), "TOUCH_REVERSE_MARGIN": (float, 0, 100),
     "TOUCH_GAIN_X": (float, 0.1, 10), "TOUCH_GAIN_Y": (float, 0.1, 10),
