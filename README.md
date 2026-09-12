@@ -297,11 +297,12 @@ Todos los tiempos están expresados en milisegundos.
 | `LONG_PRESS_MS` | `300` | Umbral de Atrás, TV y Siri largos, y de Centro largo cuando sus teclas difieren |
 | `DOUBLE_CLICK_MS` | `300` | Espera tras soltar para distinguir clic simple de doble, sólo en botones con doble clic habilitado |
 | `REPEAT_ENABLED` | `true` | Repite las direcciones del aro y volumen arriba/abajo al mantenerlos |
-| `REPEAT_DELAY_MS` | `450` | Espera hasta la primera repetición |
-| `REPEAT_INTERVAL_MS` | `120` | Separación entre repeticiones |
+| `REPEAT_DELAY_MS` | `450` | Espera hasta la primera repetición, tanto del aro como del volumen |
+| `REPEAT_INTERVAL_MS` | `120` | Separación entre repeticiones de las direcciones del aro |
+| `VOLUME_REPEAT_INTERVAL_MS` | `120` | Separación entre repeticiones de volumen arriba y abajo |
 
 La primera flecha del aro se envía al presionar. Centro, Atrás, TV, Siri y las
-teclas multimedia no se repiten. Si el proceso se retrasa, no recupera los
+teclas multimedia salvo volumen arriba y abajo no se repiten. Si el proceso se retrasa, no recupera los
 pasos atrasados en una ráfaga.
 
 ### Superficie táctil

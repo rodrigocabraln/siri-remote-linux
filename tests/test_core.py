@@ -46,7 +46,7 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_invalid_numbers(self):
         for text in ("TOUCH_STEP=nan", "TOUCH_STEP=0", "LONG_PRESS_MS=99",
-                     "REPEAT_INTERVAL_MS=2"):
+                     "REPEAT_INTERVAL_MS=2", "VOLUME_REPEAT_INTERVAL_MS=2"):
             with self.subTest(text=text), self.assertRaises(ValueError): parse_settings(text)
 
     def test_invalid_enum_boolean_unknown_and_duplicate(self):
@@ -299,7 +299,7 @@ class NavigationTests(unittest.TestCase):
                 with self.subTest(name=name, stop=stop):
                     self.now = 0; self.sent = []
                     self.nav = Navigation(lambda *x: self.sent.append(x),
-                        Settings(repeat_delay_ms=500, repeat_interval_ms=250), lambda: self.now)
+                        Settings(repeat_delay_ms=500, volume_repeat_interval_ms=250), lambda: self.now)
                     expected = ("Input.ExecuteAction", {"action": action})
                     self.button("PRESIONADO", name)
                     self.now = .49; self.nav.tick()
@@ -325,6 +325,20 @@ class NavigationTests(unittest.TestCase):
         self.now = 5; self.nav.tick()
         self.assertEqual(self.sent, [("Input.ExecuteAction", {"action": "volumeup"}),
                                      ("Input.ExecuteAction", {"action": "volumedown"})])
+
+    def test_volume_repeat_interval_is_independent(self):
+        self.nav.settings = Settings(repeat_delay_ms=100, repeat_interval_ms=100,
+                                     volume_repeat_interval_ms=300)
+        self.button("PRESIONADO", "DERECHA")
+        self.button("PRESIONADO", "VOLUMEN_ARRIBA")
+        self.now = .11; self.nav.tick()
+        self.now = .22; self.nav.tick()
+        self.now = .33; self.nav.tick()
+        self.assertEqual(self.sent, [("Input.Right",),
+                                     ("Input.ExecuteAction", {"action": "volumeup"}),
+                                     ("Input.Right",),
+                                     ("Input.ExecuteAction", {"action": "volumeup"}),
+                                     ("Input.Right",), ("Input.Right",)])
 
     def test_continuous_threshold_interval(self):
         self.touch("INICIO", 0); self.touch("MOVER", 9); self.now = .05; self.touch("MOVER", 20)

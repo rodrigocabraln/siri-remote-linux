@@ -161,7 +161,9 @@ class Navigation:
                     self.send("Input.ExecuteAction", {"action": VOLUME_ACTIONS[name]})
                 else:
                     self.send("Input." + methods[name])
-                self.repeat_due[name] = now + self.settings.repeat_interval_ms / 1000
+                interval_ms = (self.settings.volume_repeat_interval_ms
+                               if name in VOLUME_ACTIONS else self.settings.repeat_interval_ms)
+                self.repeat_due[name] = now + interval_ms / 1000
 
     def reset(self):
         while self.held_gestures:
