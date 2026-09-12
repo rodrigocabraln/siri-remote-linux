@@ -207,6 +207,7 @@ class PairingTests(unittest.TestCase):
         backend.scanning = False
         backend.start_scan = Mock()
         backend.stop_scan = Mock()
+        backend.wait_for_advertisement = Mock(return_value=False)
         backend.call.side_effect = [({"Connected": False},), DBusError("org.freedesktop.DBus.Error.NoReply"), ()]
         with self.assertRaisesRegex(TimeoutError, "no respondió a Connect"):
             backend.connect("/selected", SimpleNamespace())

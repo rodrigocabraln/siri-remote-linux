@@ -12,6 +12,64 @@ from siri_remote_linux.remotes.a2540 import A2540Profile, HID
 
 
 class ReconnectTests(unittest.TestCase):
+    def test_fresh_target_signal_required_despite_cached_advertising(self):
+        backend = BlueZBackend.__new__(BlueZBackend)
+        backend.device_path = "/target"
+        backend.advertisement_path = None
+        backend.profile = None
+        backend.interface = Mock()
+        backend.call = Mock(return_value=({"Connected": False, "RSSI": -40,
+                                           "ManufacturerData": {76: b"cached"}},))
+        events = iter([("/other", {"RSSI": -30}),
+                       ("/target", {"Trusted": True}),
+                       ("/target", {"ManufacturerData": {76: b"fresh"}})])
+        def pump(_):
+            path, changed = next(events)
+            backend._changed(DEVICE, changed, [], path)
+        backend.pump = Mock(side_effect=pump)
+        self.assertFalse(backend.wait_for_advertisement("/target"))
+        self.assertEqual(backend.pump.call_count, 3)
+
+    def test_no_advertisement_never_calls_connect_and_stops_scan(self):
+        backend = BlueZBackend.__new__(BlueZBackend)
+        backend.scanning = False
+        backend.interface = Mock()
+        backend.call = Mock(return_value=({"Connected": False},))
+        backend.start_scan = Mock()
+        backend.stop_scan = Mock()
+        backend.pump = Mock()
+        with patch("siri_remote_linux.bluetooth.bluez.time.monotonic",
+                   side_effect=[0, 0, 21]):
+            with self.assertRaisesRegex(TimeoutError, "publicidad nueva"):
+                backend.connect("/target", Mock())
+        self.assertEqual(backend.call.call_count, 1)
+        backend.stop_scan.assert_called_once()
+
+    def test_abort_cancels_connection_after_fresh_advertisement(self):
+        backend = BlueZBackend.__new__(BlueZBackend)
+        backend.scanning = False
+        interface = Mock()
+        backend.interface = Mock(return_value=interface)
+        backend.start_scan = Mock()
+        backend.stop_scan = Mock()
+        backend.wait_for_advertisement = Mock(return_value=False)
+        backend.call = Mock(side_effect=[({"Connected": False},),
+                                        RuntimeError("le-connection-abort-by-local"), ()])
+        with self.assertRaisesRegex(RuntimeError, "abort-by-local"):
+            backend.connect("/target", Mock())
+        backend.wait_for_advertisement.assert_called_once_with("/target")
+        self.assertEqual(backend.call.call_args_list[1].args[0], interface.Connect)
+        self.assertEqual(backend.call.call_args_list[2].args[0], interface.Disconnect)
+        backend.stop_scan.assert_called_once()
+
+    def test_automatic_connection_does_not_require_advertisement(self):
+        backend = BlueZBackend.__new__(BlueZBackend)
+        backend.interface = Mock()
+        backend.call = Mock(return_value=({"Connected": True},))
+        backend.pump = Mock()
+        self.assertTrue(backend.wait_for_advertisement("/target"))
+        backend.pump.assert_not_called()
+
     def backend(self, **changes):
         backend = BlueZBackend.__new__(BlueZBackend)
         backend.adapter_path = "/org/bluez/hci1"

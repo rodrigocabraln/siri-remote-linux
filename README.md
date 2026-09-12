@@ -206,6 +206,15 @@ datos de publicidad recientes como `ManufacturerData`. La tabla GATT se valida
 antes de activar el mando. El Device ID persistente del A2540 también permite
 reconocerlo en `list` y `setup` después de reiniciar Bluetooth.
 
+Antes de conectar un mando desconectado, se escanea y se espera hasta 20 segundos
+por publicidad nueva asociada a su identidad. Los datos guardados de RSSI o
+fabricante no bastan. Después hay hasta 40 segundos para conectar y resolver
+GATT. Si BlueZ conecta automáticamente durante la espera, se continúa con GATT.
+Los intentos de conexión fallidos se cancelan antes del siguiente reintento.
+Este orden busca evitar conectar antes de que BlueZ actualice la dirección
+privada del mando; es un workaround experimental, pendiente de validar con
+`btmon` y reinicios en el equipo afectado. No reemplaza una corrección del kernel.
+
 ### Teclas y remapeos
 
 | Opción | Entrada | Valor inicial |

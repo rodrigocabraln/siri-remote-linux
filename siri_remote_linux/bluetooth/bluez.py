@@ -44,6 +44,8 @@ class BlueZBackend:
         self.dbus, mainloop, self.GLib = dependencies()
         mainloop(set_as_default=True)
         self.bus = self.dbus.SystemBus(private=True)
+        # Let the supervisor recover instead of letting libdbus call _exit(1).
+        self.bus.set_exit_on_disconnect(False)
         self.context = self.GLib.MainContext.default()
         self.adapter_name = adapter
         self.adapter_path = "/org/bluez/" + adapter
@@ -51,6 +53,7 @@ class BlueZBackend:
         self.raw_touch = raw_touch
         self.profile = self.device_path = None
         self.scanning = False
+        self.advertisement_path = None
         self.cancelled = False
         self.subscribed = []
         self.matches = [self.bus.add_signal_receiver(self._changed, signal_name="PropertiesChanged",
@@ -212,28 +215,46 @@ class BlueZBackend:
         self.interface(path, PROPS).Set(DEVICE, "Trusted", self.dbus.Boolean(True))
         return props
 
+    def wait_for_advertisement(self, path, timeout=20):
+        """Wait for fresh target advertising or an automatic connection."""
+        deadline = time.monotonic() + timeout
+        log.info("Esperando publicidad nueva del mando; pulsá y soltá un botón")
+        while time.monotonic() < deadline:
+            props = self.call(self.interface(path, PROPS).GetAll, DEVICE, timeout=10)[0]
+            if props.get("Connected"):
+                return True
+            if self.advertisement_path == path:
+                log.info("Publicidad nueva recibida; iniciando conexión")
+                return False
+            self.pump(0.1)
+        raise TimeoutError("No llegó publicidad nueva del mando en 20s; esperando que despierte")
+
     def connect(self, path, profile):
         self.device_path, self.profile = path, profile
         device = self.interface(path, DEVICE)
         props = self.call(self.interface(path, PROPS).GetAll, DEVICE, timeout=10)[0]
         deadline = time.monotonic() + 40
         if not props.get("Connected"):
-            # Descubrir mientras se despierta el mando permite actualizar su RPA.
+            # Let BlueZ refresh the peer's RPA before creating a connection.
             own_scan = not self.scanning
+            self.advertisement_path = None
             try:
                 if own_scan:
                     self.start_scan()
+                already_connected = self.wait_for_advertisement(path)
+                deadline = time.monotonic() + 40
                 try:
-                    self.call(device.Connect, timeout=max(1, deadline - time.monotonic()))
+                    if not already_connected:
+                        self.call(device.Connect, timeout=max(1, deadline - time.monotonic()))
                 except Exception as exc:
                     name = getattr(exc, "get_dbus_name", lambda: "")()
-                    if name == "org.freedesktop.DBus.Error.NoReply" or isinstance(exc, TimeoutError):
-                        # El timeout D-Bus no cancela la operación en BlueZ.
+                    if name != "org.bluez.Error.InProgress":
+                        # Clear failed or pending attempts before the next scan.
                         try: self.call(device.Disconnect, timeout=3)
                         except Exception: pass
-                        raise TimeoutError("El mando vinculado no respondió a Connect en 40s; "
-                                           "pulsá y soltá un botón y repetí setup. "
-                                           "Si sigue sin responder, puede ser necesario renovar el vínculo.") from exc
+                    if name == "org.freedesktop.DBus.Error.NoReply" or isinstance(exc, TimeoutError):
+                        raise TimeoutError("El mando no respondió a Connect en 40s; "
+                                           "se reintentará con publicidad nueva") from exc
                     if name != "org.bluez.Error.InProgress":
                         raise
             finally:
@@ -243,7 +264,10 @@ class BlueZBackend:
             props = self.call(self.interface(path, PROPS).GetAll, DEVICE, timeout=10)[0]
             if props.get("Connected") and props.get("ServicesResolved"): break
             self.pump(0.2)
-        else: raise TimeoutError("No se resolvió GATT en 40s")
+        else:
+            try: self.call(device.Disconnect, timeout=3)
+            except Exception: pass
+            raise TimeoutError("No se resolvió GATT en 40s")
         objects = self.objects(); chars = {}
         for obj, interfaces in objects.items():
             if str(obj).startswith(path + "/") and CHAR in interfaces:
@@ -264,6 +288,10 @@ class BlueZBackend:
 
     def _changed(self, interface, changed, invalidated, path=None):
         path = str(path)
+        # Cached GetAll properties do not prove the peer is currently advertising.
+        if (interface == DEVICE and path == self.device_path
+                and any(key in changed for key in ("RSSI", "ManufacturerData", "ServiceData"))):
+            self.advertisement_path = path
         if interface == DEVICE and path == self.device_path and changed.get("Connected") is not None and not changed["Connected"]:
             if self.event_handler: self.event_handler(Disconnected("El mando se desconectó"))
         if interface == CHAR and self.profile and "Value" in changed:

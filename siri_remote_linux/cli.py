@@ -102,7 +102,7 @@ def setup_command(args, backend_factory=BlueZBackend, input_fn=input, output=pri
         received = []
         backend.event_handler = lambda event: received.append(event) if isinstance(event, (ButtonEvent, TouchEvent)) else None
         output("Vínculo confirmado. Pulsá y soltá un botón para despertar el mando; "
-               "verificando conexión y GATT (hasta 40 s para conectar/resolver servicios).")
+               "verificando conexión y GATT (hasta 20 s para publicidad y 40 s para conectar/resolver servicios).")
         backend.connect(path, profile)
         output("Conexión y GATT verificados. Pulsá un botón para verificar eventos.")
         deadline = time.monotonic() + args.verify_seconds
