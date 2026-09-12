@@ -99,6 +99,11 @@ class A2540Profile(RemoteProfile):
 
     @classmethod
     def matches(cls, props):
+        # Device ID survives restarts; ManufacturerData depends on discovery.
+        if (props.get("Paired") and
+                re.fullmatch(r"bluetooth:v004Cp0314d[0-9a-fA-F]{4}",
+                             str(props.get("Modalias", "")), re.IGNORECASE)):
+            return True
         return (0x004C in props.get("ManufacturerData", {}) and HID in props.get("UUIDs", [])
                 and int(props.get("Appearance", 0)) == 0x03C0 and "Class" not in props)
 

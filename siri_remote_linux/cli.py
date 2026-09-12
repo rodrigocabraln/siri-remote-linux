@@ -8,7 +8,7 @@ import time
 
 from .bluetooth.bluez import BlueZBackend, dependencies
 from .bluetooth.agent import create_agent
-from .config import load_settings, save_identity
+from .config import load_settings, parse_settings, save_identity
 from .events import ButtonEvent, TouchEvent
 from .input import Keyboard
 from .remotes.a2540 import A2540Profile
@@ -42,11 +42,21 @@ def choose(items, input_fn=input, output=print):
 
 
 def setup_command(args, backend_factory=BlueZBackend, input_fn=input, output=print):
-    backend = backend_factory(adapter=args.adapter, event_handler=None, raw_touch=args.raw_touch)
+    settings = load_settings(args.config) if args.config.exists() else None
+    adapter = args.adapter or (settings.adapter if settings else "hci0")
+    # Validate the override before modifying any bonds.
+    parse_settings(f"ADAPTER={adapter}")
+    backend = backend_factory(adapter=adapter, event_handler=None, raw_touch=args.raw_touch)
     agent = None
     try:
         backend.adapter()
         paired = [item for item in backend.devices() if item[1].get("Paired")]
+        if (settings and settings.remote_identity and not any(
+                str(item[1].get("Address", "")).upper() == settings.remote_identity for item in paired)):
+            for path, props, profile in backend.devices(False):
+                if (str(props.get("Address", "")).upper() == settings.remote_identity
+                        and props.get("Paired") and path not in {item[0] for item in paired}):
+                    paired.append((path, props, profile or A2540Profile))
         if paired:
             output("Setup renueva el vínculo Bluetooth desde cero.")
             old_path, old_props, old_profile = choose(paired, input_fn, output)
@@ -99,7 +109,7 @@ def setup_command(args, backend_factory=BlueZBackend, input_fn=input, output=pri
         while time.monotonic() < deadline and not received: backend.pump(0.1)
         if not received: raise RuntimeError("No llegaron eventos; despertá el mando y repetí setup")
         identity = profile_class.stable_identity(props)
-        save_identity(args.config, identity, TEMPLATE)
+        save_identity(args.config, identity, TEMPLATE, adapter=adapter)
         output(f"Configuración guardada en {args.config}")
         output("Probá ./siri-remote run; para instalar el servicio consultá README.md y service-unit.")
         return 0
@@ -184,7 +194,7 @@ def parser():
     result = argparse.ArgumentParser(prog="siri-remote", description="Apple Siri Remote como teclado Linux")
     sub = result.add_subparsers(dest="command", required=True)
     setup = sub.add_parser("setup", help="olvidar el vínculo previo, emparejar desde cero y verificar"); add_runtime_options(setup)
-    setup.add_argument("--adapter", default="hci0"); setup.add_argument("--seconds", type=int, default=60)
+    setup.add_argument("--adapter", help="adaptador a usar y guardar (por defecto ADAPTER del config, o hci0)"); setup.add_argument("--seconds", type=int, default=60)
     setup.add_argument("--min-rssi", type=int, default=-75); setup.add_argument("--verify-seconds", type=int, default=15)
     run = sub.add_parser("run", help="ejecutar el supervisor persistente"); add_runtime_options(run)
     doctor = sub.add_parser("doctor", help="diagnosticar instalación"); doctor.add_argument("--config", type=Path, default=DEFAULT_CONFIG); doctor.add_argument("--adapter", default="hci0"); doctor.add_argument("--no-touch", action="store_true"); doctor.add_argument("--listen-seconds", type=float, default=5)

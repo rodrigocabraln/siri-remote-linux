@@ -122,10 +122,18 @@ class BlueZBackend:
 
     def resolve(self, identity):
         identity = identity.upper()
-        matches = [(path, props, profile) for path, props, profile in self.devices()
-                   if profile.stable_identity(props) == identity and props.get("Paired")]
-        if len(matches) != 1: raise RuntimeError(f"No se encontró un único mando vinculado con identidad {identity}")
-        return matches[0]
+        matches = [(path, props, profile) for path, props, profile in self.devices(False)
+                   if str(props.get("Address", "")).upper() == identity]
+        if not matches:
+            raise RuntimeError(f"No existe el mando {identity} en {self.adapter_path}; comprobá ADAPTER")
+        if len(matches) != 1:
+            raise RuntimeError(f"Hay varios dispositivos con identidad {identity} en {self.adapter_path}")
+        path, props, profile = matches[0]
+        if not props.get("Paired") or not props.get("Bonded", True):
+            raise RuntimeError(f"El mando {identity} en {self.adapter_path} no está vinculado; ejecutá setup")
+        # Setup selected and verified this identity. Resolve it without recent
+        # advertising data; connect validates GATT before activation.
+        return path, props, profile or A2540Profile
 
     def start_scan(self):
         self.adapter()

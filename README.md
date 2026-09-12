@@ -69,6 +69,11 @@ Si el nuevo setup falla, el vínculo eliminado no se restaura: repite el
 emparejamiento. Los ajustes de `config.env` se conservan y la identidad se
 actualiza únicamente después de verificar eventos.
 
+`setup` usa `ADAPTER` del archivo indicado por `--config` (o `hci0` si todavía
+no hay configuración). `./siri-remote setup --adapter hci1` permite elegir otro
+adaptador y lo guarda junto con la identidad después de verificar eventos,
+para que `run` use el mismo.
+
 Cuando se establezca la conexión, pulsa un botón cuando el asistente lo indique.
 En cuanto reciba un evento, `setup` guardará la identidad del mando y la
 configuración inicial en `config.env`. El programa controla un solo mando a la
@@ -196,6 +201,10 @@ de rango producen un error antes de crear el teclado virtual.
 `REMOTE_IDENTITY` contiene la identidad seleccionada durante `setup` y
 `ADAPTER` elige el adaptador, inicialmente `hci0`. La ruta D-Bus del dispositivo
 se resuelve en cada sesión y no se guarda. `config.env` está excluido de Git.
+Para reconectar se busca la identidad vinculada en ese adaptador, sin exigir
+datos de publicidad recientes como `ManufacturerData`. La tabla GATT se valida
+antes de activar el mando. El Device ID persistente del A2540 también permite
+reconocerlo en `list` y `setup` después de reiniciar Bluetooth.
 
 ### Teclas y remapeos
 

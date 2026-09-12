@@ -171,8 +171,8 @@ def load_settings(path):
     return parse_settings(path.read_text(encoding="utf-8"), str(path))
 
 
-def save_identity(path, identity, template_path=None):
-    """Actualiza sólo REMOTE_IDENTITY y conserva los ajustes del usuario."""
+def save_identity(path, identity, template_path=None, *, adapter=None):
+    """Update the identity and selected adapter while preserving other settings."""
     identity = identity.upper()
     parse_settings(f"REMOTE_IDENTITY={identity}", str(path))
     path = Path(path)
@@ -182,11 +182,16 @@ def save_identity(path, identity, template_path=None):
         lines = Path(template_path).read_text(encoding="utf-8").splitlines()
     else:
         lines = []
-    replacement = f"REMOTE_IDENTITY={identity}"
-    found = False
-    for index, line in enumerate(lines):
-        if line.split("#", 1)[0].strip().startswith("REMOTE_IDENTITY="):
-            lines[index], found = replacement, True
-    if not found:
-        lines.insert(0, replacement)
+    updates = {"REMOTE_IDENTITY": identity}
+    if adapter is not None:
+        parse_settings(f"ADAPTER={adapter}", str(path))
+        updates["ADAPTER"] = adapter
+    for key, value in updates.items():
+        replacement = f"{key}={value}"
+        found = False
+        for index, line in enumerate(lines):
+            if line.split("#", 1)[0].partition("=")[0].strip() == key:
+                lines[index], found = replacement, True
+        if not found:
+            lines.insert(0, replacement)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
