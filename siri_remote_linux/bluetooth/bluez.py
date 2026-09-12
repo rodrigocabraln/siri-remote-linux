@@ -32,6 +32,7 @@ def dependencies():
 class BlueZUnavailable(RuntimeError): pass
 class AdapterUnavailable(RuntimeError): pass
 class Disconnected(RuntimeError): pass
+class OperationCancelled(RuntimeError): pass
 
 
 def profile_for(properties):
@@ -50,6 +51,7 @@ class BlueZBackend:
         self.raw_touch = raw_touch
         self.profile = self.device_path = None
         self.scanning = False
+        self.cancelled = False
         self.subscribed = []
         self.matches = [self.bus.add_signal_receiver(self._changed, signal_name="PropertiesChanged",
                         dbus_interface=PROPS, path_keyword="path")]
@@ -60,12 +62,16 @@ class BlueZBackend:
     def pump(self, seconds=0.05):
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
+            if getattr(self, "cancelled", False):
+                raise OperationCancelled("Operación cancelada")
             for _ in range(100):
                 if not self.context.pending(): break
                 self.context.iteration(False)
             time.sleep(0.01)
 
     def call(self, method, *args, timeout=30):
+        if getattr(self, "cancelled", False):
+            raise OperationCancelled("Operación cancelada")
         result, errors = [], []
         pending = method(*args, reply_handler=lambda *reply: result.append(reply),
                          error_handler=errors.append, timeout=timeout)
@@ -80,7 +86,8 @@ class BlueZBackend:
             if pending is not None: pending.cancel()
 
     def objects(self):
-        try: return self.interface("/", OBJECTS).GetManagedObjects(timeout=10)
+        try: return self.call(self.interface("/", OBJECTS).GetManagedObjects, timeout=10)[0]
+        except OperationCancelled: raise
         except Exception as exc: raise BlueZUnavailable("BlueZ no está disponible") from exc
 
     def adapter(self):
@@ -123,7 +130,8 @@ class BlueZBackend:
     def start_scan(self):
         self.adapter()
         adapter = self.interface(self.adapter_path, ADAPTER)
-        adapter.SetDiscoveryFilter(self.dbus.Dictionary({"Transport": "le", "DuplicateData": True}, signature="sv"))
+        self.call(adapter.SetDiscoveryFilter,
+                  self.dbus.Dictionary({"Transport": "le", "DuplicateData": True}, signature="sv"), timeout=10)
         self.call(adapter.StartDiscovery, timeout=10); self.scanning = True
 
     def stop_scan(self):
@@ -131,13 +139,15 @@ class BlueZBackend:
             try: self.call(self.interface(self.adapter_path, ADAPTER).StopDiscovery, timeout=5)
             finally: self.scanning = False
 
-    def scan(self, seconds=60, min_rssi=-75):
+    def scan(self, seconds=60, min_rssi=-75, exclude_paths=()):
         self.start_scan(); deadline = time.monotonic() + seconds; found = {}
         try:
             while time.monotonic() < deadline:
                 self.pump(0.15)
                 for item in self.devices():
                     path, props, profile = item
+                    if path in exclude_paths:
+                        continue
                     if props.get("Paired") or int(props.get("RSSI", -999)) >= min_rssi: found[path] = item
                 # En modo de emparejamiento hay una ventana breve de publicidad:
                 # no esperar el timeout una vez que hay un candidato inequívoco.
@@ -147,11 +157,48 @@ class BlueZBackend:
         finally: self.stop_scan()
 
     def pair(self, path, agent):
-        props = self.interface(path, PROPS).GetAll(DEVICE, timeout=10)
-        if not props.get("Paired"):
-            agent.target = path
-            self.call(self.interface(path, DEVICE).Pair, timeout=30)
-        props = self.interface(path, PROPS).GetAll(DEVICE, timeout=10)
+        def properties():
+            try:
+                return self.interface(path, PROPS).GetAll(DEVICE, timeout=10)
+            except Exception as exc:
+                if getattr(exc, "get_dbus_name", lambda: "")() in (
+                        "org.freedesktop.DBus.Error.UnknownObject",
+                        "org.freedesktop.DBus.Error.UnknownInterface",
+                        "org.bluez.Error.DoesNotExist"):
+                    raise RuntimeError("El mando seleccionado desapareció de BlueZ; "
+                                       "volvé a ponerlo en modo de emparejamiento y repetí setup") from exc
+                raise
+        agent.target = path
+        for attempt in range(1, 4):
+            props = properties()
+            if props.get("Paired"):
+                break
+            log.info("Emparejando %s (intento %d/3)", props.get("Address", path), attempt)
+            try:
+                self.call(self.interface(path, DEVICE).Pair, timeout=30)
+                break
+            except Exception as exc:
+                error_name = getattr(exc, "get_dbus_name", lambda: "")()
+                att_failure = (error_name == "org.bluez.Error.Failed" and
+                               "ATT error: 0x0e" in str(exc))
+                if error_name != "org.bluez.Error.AuthenticationCanceled" and not att_failure:
+                    raise
+                # BlueZ también usa AuthenticationCanceled para un enlace cortado.
+                # Releer el estado evita repetir Pair si el vínculo sí se completó.
+                props = properties()
+                if props.get("Paired"):
+                    log.warning("Pair devolvió %s, pero BlueZ confirmó el vínculo; verificando GATT", exc)
+                    break
+                if att_failure:
+                    raise
+                if attempt == 3:
+                    raise RuntimeError("BlueZ canceló o interrumpió el emparejamiento "
+                                       "(AuthenticationCanceled) tras 3 intentos; acercá el mando, "
+                                       "activá Atrás + Volumen arriba y repetí setup") from exc
+                log.warning("Emparejamiento interrumpido (AuthenticationCanceled); "
+                            "reintentando el mismo mando en 1s")
+                self.pump(1)
+        props = properties()
         if not props.get("Paired") or not props.get("Bonded", props.get("Paired")):
             raise RuntimeError("BlueZ no confirmó Paired y Bonded")
         self.interface(path, PROPS).Set(DEVICE, "Trusted", self.dbus.Boolean(True))
@@ -160,14 +207,32 @@ class BlueZBackend:
     def connect(self, path, profile):
         self.device_path, self.profile = path, profile
         device = self.interface(path, DEVICE)
-        props = self.interface(path, PROPS).GetAll(DEVICE, timeout=10)
-        if not props.get("Connected"):
-            try: self.call(device.Connect, timeout=40)
-            except Exception as exc:
-                if getattr(exc, "get_dbus_name", lambda: "")() != "org.bluez.Error.InProgress": raise
+        props = self.call(self.interface(path, PROPS).GetAll, DEVICE, timeout=10)[0]
         deadline = time.monotonic() + 40
+        if not props.get("Connected"):
+            # Descubrir mientras se despierta el mando permite actualizar su RPA.
+            own_scan = not self.scanning
+            try:
+                if own_scan:
+                    self.start_scan()
+                try:
+                    self.call(device.Connect, timeout=max(1, deadline - time.monotonic()))
+                except Exception as exc:
+                    name = getattr(exc, "get_dbus_name", lambda: "")()
+                    if name == "org.freedesktop.DBus.Error.NoReply" or isinstance(exc, TimeoutError):
+                        # El timeout D-Bus no cancela la operación en BlueZ.
+                        try: self.call(device.Disconnect, timeout=3)
+                        except Exception: pass
+                        raise TimeoutError("El mando vinculado no respondió a Connect en 40s; "
+                                           "pulsá y soltá un botón y repetí setup. "
+                                           "Si sigue sin responder, puede ser necesario renovar el vínculo.") from exc
+                    if name != "org.bluez.Error.InProgress":
+                        raise
+            finally:
+                if own_scan:
+                    self.stop_scan()
         while time.monotonic() < deadline:
-            props = self.interface(path, PROPS).GetAll(DEVICE, timeout=10)
+            props = self.call(self.interface(path, PROPS).GetAll, DEVICE, timeout=10)[0]
             if props.get("Connected") and props.get("ServicesResolved"): break
             self.pump(0.2)
         else: raise TimeoutError("No se resolvió GATT en 40s")
@@ -205,11 +270,14 @@ class BlueZBackend:
 
     def connected(self):
         if not self.device_path: return False
-        try: return bool(self.interface(self.device_path, PROPS).Get(DEVICE, "Connected", timeout=10))
+        try: return bool(self.call(self.interface(self.device_path, PROPS).Get,
+                                   DEVICE, "Connected", timeout=10)[0])
+        except OperationCancelled: raise
         except Exception as exc: raise BlueZUnavailable("Se perdió BlueZ o el adaptador") from exc
 
     def remove(self, path):
-        self.call(self.interface(self.adapter_path, ADAPTER).RemoveDevice(self.dbus.ObjectPath(path)), timeout=10)
+        self.call(self.interface(self.adapter_path, ADAPTER).RemoveDevice,
+                  self.dbus.ObjectPath(path), timeout=10)
 
     def close(self):
         for path in self.subscribed:

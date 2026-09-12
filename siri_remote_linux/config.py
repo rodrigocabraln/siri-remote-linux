@@ -8,10 +8,20 @@ KEY_BINDINGS = {
     "Input.Up": "key_up", "Input.Down": "key_down",
     "Input.Left": "key_left", "Input.Right": "key_right",
     "Input.Select": "key_center", "Input.ContextMenu": "key_center_long",
-    "Input.Back": "key_back", "Input.Home": "key_tv",
+    "Input.Back": "key_back", "Input.BackLong": "key_back_long",
+    "Input.Home": "key_tv",
     "playpause": "key_playpause", "volumeup": "key_volumeup",
     "volumedown": "key_volumedown", "mute": "key_mute",
-    "Input.TVLong": "key_tv_long", "Input.Siri": "key_siri",
+    "Input.TVLong": "key_tv_long",
+    "Input.Siri": "key_siri", "Input.SiriLong": "key_siri_long",
+    "Input.BackDouble": "key_back_double", "Input.TVDouble": "key_tv_double",
+    "Input.SiriDouble": "key_siri_double",
+}
+
+CHORD_BINDING_FIELDS = {
+    "key_tv_long", "key_siri",
+    "key_back_long", "key_siri_long",
+    "key_back_double", "key_tv_double", "key_siri_double",
 }
 
 
@@ -38,12 +48,20 @@ def validate_binding(value):
     return value
 
 
+def validate_optional_key(value):
+    return value if value == "NONE" else validate_key(value)
+
+
 @dataclass(frozen=True)
 class Settings:
     remote_identity: str = ""
     adapter: str = "hci0"
     button_debounce_ms: int = 50
     long_press_ms: int = 300
+    double_click_ms: int = 300
+    key_back_double: str = "NONE"
+    key_tv_double: str = "NONE"
+    key_siri_double: str = "NONE"
     repeat_enabled: bool = True
     repeat_delay_ms: int = 450
     repeat_interval_ms: int = 120
@@ -51,6 +69,8 @@ class Settings:
     touch_step: float = 18
     touch_interval_ms: int = 90
     touch_settle_ms: int = 50
+    touch_pressure_on: int = 10
+    touch_pressure_off: int = 4
     touch_gain_x: float = 1
     touch_gain_y: float = 1
     touch_invert_y: bool = False
@@ -63,6 +83,7 @@ class Settings:
     key_center: str = "KEY_ENTER"
     key_center_long: str = "KEY_ENTER"
     key_back: str = "KEY_ESC"
+    key_back_long: str = "NONE"
     key_tv: str = "KEY_HOME"
     key_playpause: str = "KEY_PLAYPAUSE"
     key_volumeup: str = "KEY_VOLUMEUP"
@@ -70,9 +91,12 @@ class Settings:
     key_mute: str = "KEY_MUTE"
     key_tv_long: str = "KEY_LEFTMETA+KEY_D"
     key_siri: str = "KEY_F12"
+    key_siri_long: str = "NONE"
 
 
 NUMBERS = {
+    "TOUCH_PRESSURE_ON": (int, 1, 255), "TOUCH_PRESSURE_OFF": (int, 1, 255),
+    "DOUBLE_CLICK_MS": (int, 0, 2000),
     "BUTTON_DEBOUNCE_MS": (int, 0, 2000), "LONG_PRESS_MS": (int, 100, 5000),
     "REPEAT_DELAY_MS": (int, 100, 5000), "REPEAT_INTERVAL_MS": (int, 30, 2000),
     "TOUCH_STEP": (float, 1, 100), "TOUCH_INTERVAL_MS": (int, 0, 2000),
@@ -95,7 +119,9 @@ def parse_settings(text, source="config.env"):
             if not separator:
                 raise ValueError("falta =")
             if key in key_fields:
-                parsed = validate_binding(value) if key in ("KEY_TV_LONG", "KEY_SIRI") else validate_key(value)
+                validator = (validate_binding if key.lower() in CHORD_BINDING_FIELDS else
+                             validate_optional_key if key == "KEY_CENTER_LONG" else validate_key)
+                parsed = validator(value)
             elif key in NUMBERS:
                 convert, low, high = NUMBERS[key]
                 parsed = convert(value)
@@ -128,7 +154,14 @@ def parse_settings(text, source="config.env"):
     known = {item.name for item in fields(Settings)}
     if not set(values) <= known:
         raise AssertionError("parser y Settings no coinciden")
-    return replace(Settings(), **values)
+    settings = replace(Settings(), **values)
+    if settings.touch_pressure_off > settings.touch_pressure_on:
+        raise ValueError(f"{source}: TOUCH_PRESSURE_OFF: debe ser menor o igual que TOUCH_PRESSURE_ON")
+    if any(getattr(settings, field) != "NONE" for field in (
+            "key_back_double", "key_tv_double", "key_siri_double")):
+        if settings.double_click_ms <= settings.button_debounce_ms:
+            raise ValueError(f"{source}: DOUBLE_CLICK_MS: debe ser mayor que BUTTON_DEBOUNCE_MS")
+    return settings
 
 
 def load_settings(path):

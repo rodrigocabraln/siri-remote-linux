@@ -15,7 +15,7 @@ Wants=bluetooth.service
 
 [Service]
 Type=simple
-WorkingDirectory={systemd_quote(executable.parent)}
+WorkingDirectory={executable.parent}
 ExecStart={systemd_quote(executable)} run --config {systemd_quote(config)}
 Restart=on-failure
 RestartSec=2

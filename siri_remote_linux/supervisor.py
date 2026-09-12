@@ -2,6 +2,7 @@
 import logging
 import signal
 import time
+import threading
 
 from .bluetooth.bluez import BlueZBackend, Disconnected
 from .remotes.a2540 import A2540Profile
@@ -37,9 +38,14 @@ class Supervisor:
         self.settings, self.output, self.backend_factory = settings, output, backend_factory
         self.no_touch, self.raw_touch, self.listen_seconds = no_touch, raw_touch, listen_seconds
         self.sleep = sleep; self.stopping = False; self.backend = None
+        self._stop_event = threading.Event()
         self.backoff = Backoff(); self.errors = ErrorGrouper(); self._old_signals = {}
 
-    def stop(self, *_): self.stopping = True
+    def stop(self, *_):
+        self.stopping = True
+        self._stop_event.set()
+        if self.backend is not None:
+            self.backend.cancelled = True
 
     def _event(self, event):
         if isinstance(event, Disconnected):
@@ -48,6 +54,7 @@ class Supervisor:
             return
         if isinstance(event, ValueError):
             # Perfil A2540 rompió continuidad por informe touch no soportado.
+            log.debug("TOUCH continuity_lost error=%s", event)
             self.output.navigation.cancel_touch(); return
         self.output.navigation.handle(event)
 
@@ -102,7 +109,10 @@ class Supervisor:
                     self.backend = None
                 if retry_delay is not None and not self.stopping:
                     log.info("Reintento en %d s", retry_delay)
-                    self.sleep(retry_delay)
+                    if self.sleep is time.sleep:
+                        self._stop_event.wait(retry_delay)
+                    else:
+                        self.sleep(retry_delay)
             return 0
         finally:
             self.output.release_all(); self._restore_signals()

@@ -26,16 +26,27 @@ class FakeDevice:
 class ConfigurationTests(unittest.TestCase):
     def test_functional_defaults(self):
         value = Settings()
-        self.assertEqual((value.long_press_ms, value.touch_step, value.touch_interval_ms, value.touch_settle_ms), (300, 18, 90, 50))
+        self.assertEqual((value.long_press_ms, value.touch_step,
+                          value.touch_interval_ms, value.touch_settle_ms), (300, 18, 90, 50))
         self.assertEqual((value.key_center, value.key_center_long, value.key_tv_long, value.key_siri),
                          ("KEY_ENTER", "KEY_ENTER", "KEY_LEFTMETA+KEY_D", "KEY_F12"))
+        self.assertEqual((value.key_back_long, value.key_siri_long), ("NONE",) * 2)
 
     def test_types_and_comments(self):
         value = parse_settings("TOUCH_STEP=6 # x\nTOUCH_INVERT_Y=true\nBUTTON_DEBOUNCE_MS=0")
         self.assertEqual(value.touch_step, 6); self.assertTrue(value.touch_invert_y)
 
+    def test_pressure_settings_validation(self):
+        value = parse_settings("TOUCH_PRESSURE_ON=12\nTOUCH_PRESSURE_OFF=5")
+        self.assertEqual((value.touch_pressure_on, value.touch_pressure_off), (12, 5))
+        for text in ("TOUCH_PRESSURE_ON=0", "TOUCH_PRESSURE_OFF=256",
+                     "TOUCH_PRESSURE_ON=4\nTOUCH_PRESSURE_OFF=5"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse_settings(text)
+
     def test_invalid_numbers(self):
-        for text in ("TOUCH_STEP=nan", "TOUCH_STEP=0", "LONG_PRESS_MS=99", "REPEAT_INTERVAL_MS=2"):
+        for text in ("TOUCH_STEP=nan", "TOUCH_STEP=0", "LONG_PRESS_MS=99",
+                     "REPEAT_INTERVAL_MS=2"):
             with self.subTest(text=text), self.assertRaises(ValueError): parse_settings(text)
 
     def test_invalid_enum_boolean_unknown_and_duplicate(self):
@@ -49,13 +60,24 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaises(ValueError): parse_settings(text)
 
     def test_key_and_chord_validation(self):
-        value = parse_settings("KEY_CENTER=KEY_SPACE\nKEY_TV_LONG=KEY_LEFTCTRL+KEY_C\nKEY_SIRI=NONE")
+        value = parse_settings("KEY_CENTER=KEY_SPACE\nKEY_TV_LONG=KEY_LEFTCTRL+KEY_C\n"
+                               "KEY_BACK_LONG=KEY_LEFTALT+KEY_B\nKEY_SIRI=NONE")
         self.assertEqual(value.key_tv_long, "KEY_LEFTCTRL+KEY_C")
-        for text in ("KEY_BACK=NOPE", "KEY_BACK=KEY_LEFTCTRL+KEY_C", "KEY_SIRI=KEY_F1+KEY_F1"):
+        self.assertEqual(value.key_back_long, "KEY_LEFTALT+KEY_B")
+        for text in ("KEY_BACK=NOPE", "KEY_BACK=KEY_LEFTCTRL+KEY_C",
+                     "KEY_SIRI=KEY_F1+KEY_F1", "KEY_SIRI_LONG=KEY_F1+KEY_F1"):
             with self.assertRaises(ValueError): parse_settings(text)
 
     def test_missing_config_has_repair(self):
         with self.assertRaisesRegex(ValueError, "setup"): load_settings("/definitely/missing")
+
+    def test_optional_double_click_config(self):
+        self.assertEqual((Settings().key_back_double, Settings().key_tv_double,
+                          Settings().key_siri_double), ("NONE",) * 3)
+        settings = parse_settings("DOUBLE_CLICK_MS=60\nKEY_BACK_DOUBLE=KEY_ESC")
+        self.assertEqual(settings.double_click_ms, 60)
+        with self.assertRaisesRegex(ValueError, "BUTTON_DEBOUNCE_MS"):
+            parse_settings("DOUBLE_CLICK_MS=50\nKEY_TV_DOUBLE=KEY_F1")
 
     def test_identity_persistence_preserves_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -153,6 +175,14 @@ class NavigationTests(unittest.TestCase):
         self.button("PRESIONADO", "CENTRO"); self.button("SOLTADO", "CENTRO")
         self.assertEqual(self.sent, [("Input.CenterLongDown",), ("Input.CenterLongUp",)])
 
+    def test_center_without_long_action_is_immediate_and_never_duplicated(self):
+        self.nav.settings = parse_settings("KEY_CENTER_LONG=NONE")
+        self.button("PRESIONADO", "CENTRO")
+        self.assertEqual(self.sent, [("Input.Select",)])
+        self.now = 1; self.nav.tick(); self.button("SOLTADO", "CENTRO")
+        self.nav.reset()
+        self.assertEqual(self.sent, [("Input.Select",)])
+
     def test_distinct_center_short_and_long(self):
         self.nav.settings = Settings(key_center_long="KEY_MENU", button_debounce_ms=0)
         self.button("PRESIONADO", "CENTRO"); self.now = .2; self.button("SOLTADO", "CENTRO")
@@ -165,10 +195,98 @@ class NavigationTests(unittest.TestCase):
         self.button("PRESIONADO", "SIRI"); self.button("PRESIONADO", "SIRI")
         self.assertEqual(self.sent, [("Input.Home",), ("Input.TVLong",), ("Input.Siri",)])
 
+    def test_short_release_is_immediate_and_long_is_exclusive(self):
+        cases = (
+            ("ATRAS", "key_back_long", "Input.Back", "Input.BackLong"),
+            ("TV", "key_tv_long", "Input.Home", "Input.TVLong"),
+            ("SIRI", "key_siri_long", "Input.Siri", "Input.SiriLong"),
+        )
+        for name, long_field, short_method, long_method in cases:
+            with self.subTest(name=name):
+                self.now = 0; self.sent = []
+                settings = Settings(button_debounce_ms=50, **{long_field: "KEY_F1"})
+                self.nav = Navigation(lambda *x: self.sent.append(x), settings, lambda: self.now)
+
+                self.button("PRESIONADO", name)
+                self.assertEqual(self.sent, [])
+                self.now = .05; self.button("SOLTADO", name)
+                self.assertEqual(self.sent, [(short_method,)])
+                self.now = .31; self.nav.tick()
+
+                self.now = 1; self.button("PRESIONADO", name); self.now = 1.31; self.nav.tick()
+                self.now = 1.35; self.button("SOLTADO", name)
+
+                self.now = 2; self.button("PRESIONADO", name); self.now = 2.05; self.button("SOLTADO", name)
+                self.now = 2.29; self.button("PRESIONADO", name); self.now = 2.31; self.nav.tick()
+                self.now = 2.34; self.button("SOLTADO", name)
+
+                self.assertEqual(self.sent, [(short_method,), (long_method,), (short_method,), (short_method,)])
+
+    def test_no_long_binding_sends_on_press_without_duplicates(self):
+        for name, field, method in (("ATRAS", "key_back_long", "Input.Back"),
+                                    ("TV", "key_tv_long", "Input.Home"),
+                                    ("SIRI", "key_siri_long", "Input.Siri")):
+            with self.subTest(name=name):
+                self.now = 0; self.sent = []
+                self.nav = Navigation(lambda *x: self.sent.append(x), Settings(**{field: "NONE"}), lambda: self.now)
+                self.button("PRESIONADO", name)
+                self.assertEqual(self.sent, [(method,)])
+                self.now = 1; self.nav.tick(); self.button("SOLTADO", name)
+                self.assertEqual(self.sent, [(method,)])
+
+    def test_long_second_press_preserves_first_short_click(self):
+        self.nav.settings = Settings(key_siri_long="KEY_F1", button_debounce_ms=50)
+        self.button("PRESIONADO", "SIRI"); self.now = .05; self.button("SOLTADO", "SIRI")
+        self.now = .15; self.button("PRESIONADO", "SIRI"); self.now = .46; self.nav.tick()
+        self.now = .5; self.button("SOLTADO", "SIRI")
+        self.assertEqual(self.sent, [("Input.Siri",), ("Input.SiriLong",)])
+
+    def test_debounce_filters_bounce_without_losing_second_click(self):
+        self.nav.settings = Settings(button_debounce_ms=50)
+        self.button("PRESIONADO", "ATRAS"); self.now = .02; self.button("SOLTADO", "ATRAS")
+        self.now = .04; self.button("PRESIONADO", "ATRAS"); self.now = .05; self.button("SOLTADO", "ATRAS")
+        self.now = .10; self.button("PRESIONADO", "ATRAS"); self.now = .12; self.button("SOLTADO", "ATRAS")
+        self.assertEqual(self.sent, [("Input.Back",), ("Input.Back",)])
+
     def test_button_bounce_does_not_block_other(self):
         self.button("PRESIONADO", "ATRAS"); self.button("SOLTADO", "ATRAS"); self.now = .01
         self.button("PRESIONADO", "ATRAS"); self.button("PRESIONADO", "DERECHA"); self.button("SOLTADO", "ATRAS")
         self.assertEqual(self.sent, [("Input.Back",), ("Input.Right",)])
+
+    def test_optional_double_click_wait_and_exclusivity(self):
+        for name, field, short, double in (
+                ("ATRAS", "key_back_double", "Input.Back", "Input.BackDouble"),
+                ("TV", "key_tv_double", "Input.Home", "Input.TVDouble"),
+                ("SIRI", "key_siri_double", "Input.Siri", "Input.SiriDouble")):
+            with self.subTest(name=name):
+                self.now = 0; self.sent = []
+                self.nav = Navigation(lambda *x: self.sent.append(x),
+                    Settings(double_click_ms=150, **{field: "KEY_ESC"}), lambda: self.now)
+                self.button("PRESIONADO", name); self.now = .05; self.button("SOLTADO", name)
+                self.now = .19; self.nav.tick(); self.assertEqual(self.sent, [])
+                self.now = .21; self.nav.tick(); self.assertEqual(self.sent, [(short,)])
+                self.now = 1; self.button("PRESIONADO", name)
+                self.now = 1.02; self.button("SOLTADO", name)
+                self.now = 1.1; self.button("PRESIONADO", name)
+                self.now = 1.12; self.button("SOLTADO", name)
+                self.now = 2; self.nav.tick()
+                self.assertEqual(self.sent, [(short,), (double,)])
+
+    def test_double_click_is_per_button_and_reset_cancels_pending(self):
+        self.nav.settings = Settings(key_tv_double="KEY_ESC")
+        self.button("PRESIONADO", "TV"); self.button("SOLTADO", "TV")
+        self.button("PRESIONADO", "ATRAS")
+        self.assertEqual(self.sent, [("Input.Back",)])
+        self.nav.reset(); self.now = 1; self.nav.tick()
+        self.assertEqual(self.sent, [("Input.Back",)])
+
+    def test_double_candidate_held_long_preserves_first_click(self):
+        self.nav.settings = Settings(key_siri_long="KEY_F1", key_siri_double="KEY_F2")
+        self.button("PRESIONADO", "SIRI"); self.now = .05; self.button("SOLTADO", "SIRI")
+        self.now = .15; self.button("PRESIONADO", "SIRI")
+        self.now = .46; self.nav.tick(); self.button("SOLTADO", "SIRI")
+        self.now = 1; self.nav.tick()
+        self.assertEqual(self.sent, [("Input.Siri",), ("Input.SiriLong",)])
 
     def test_repeat_and_no_catchup(self):
         self.button("PRESIONADO", "DERECHA"); self.now = .46; self.nav.tick(); self.now = 5; self.nav.tick()
@@ -195,6 +313,8 @@ class NavigationTests(unittest.TestCase):
     def test_axis_lock_and_reversal(self):
         self.nav.settings = Settings(touch_step=10, touch_interval_ms=0, touch_settle_ms=0)
         self.touch("INICIO", 0); self.touch("MOVER", 11, 10); self.touch("MOVER", 11, 20); self.touch("MOVER", 35, 22); self.touch("MOVER", 35, 9)
+        self.assertEqual(self.sent, [("Input.Up",)])
+        self.touch("MOVER", 35, 8)
         self.assertEqual(self.sent, [("Input.Up",), ("Input.Down",)])
 
     def test_pressure_only_no_pending_motion(self):
@@ -206,10 +326,95 @@ class NavigationTests(unittest.TestCase):
         self.touch("INICIO", 0); self.touch("MOVER", 18); self.touch("FIN", 18); self.now = .01
         self.touch("INICIO", 0); self.touch("MOVER", 18); self.assertEqual(len(self.sent), 2)
 
-    def test_settle_reanchors_origin(self):
+    def test_settle_preserves_origin(self):
         self.nav.settings = Settings(touch_settle_ms=160, touch_interval_ms=0, touch_step=10)
         self.touch("INICIO", 100); self.now=.05; self.touch("MOVER", 60); self.now=.15; self.touch("MOVER", 40)
-        self.now=.17; self.touch("MOVER", 31); self.touch("MOVER", 20); self.assertEqual(self.sent, [("Input.Left",)])
+        self.now=.17; self.touch("MOVER", 31); self.touch("MOVER", 20); self.assertEqual(self.sent, [("Input.Left",), ("Input.Left",)])
+
+    def test_short_contact_emits_net_movement(self):
+        self.nav.settings = Settings()
+        self.touch("INICIO", 50); self.now = .02; self.touch("MOVER", 70)
+        self.now = .04; self.touch("FIN", 70)
+        self.assertEqual(self.sent, [("Input.Right",)])
+        self.assertIsNone(self.nav.origin)
+
+    def test_settle_partial_return_does_not_reverse_direction(self):
+        self.nav.settings = Settings()
+        self.touch("INICIO", 50); self.now = .02; self.touch("MOVER", 75)
+        self.now = .06; self.touch("MOVER", 55); self.touch("FIN", 55)
+        self.assertEqual(self.sent, [])
+        self.assertIsNone(self.nav.origin)
+
+    def test_small_retreat_does_not_block_forward_step(self):
+        self.nav.settings = Settings()
+        self.touch("INICIO", 30); self.now = .06; self.touch("MOVER", 50)
+        self.now = .09; self.touch("MOVER", 75)
+        self.now = .16; self.touch("MOVER", 74)
+        self.assertEqual(self.sent, [("Input.Right",), ("Input.Right",)])
+
+    def test_reversal_requires_step_plus_margin(self):
+        self.nav.settings = Settings(touch_step=10, touch_reverse_margin=4,
+                                     touch_settle_ms=0, touch_interval_ms=0)
+        for sign in (-1, 1):
+            for vertical in (False, True):
+                self.nav.reset(); self.sent.clear()
+                def move(action, value):
+                    self.touch(action, 0 if vertical else value * sign,
+                               value * sign if vertical else 0)
+                move("INICIO", 0); move("MOVER", 20); move("MOVER", 9)
+                self.assertEqual(len(self.sent), 1)
+                move("MOVER", 6)
+                forward, reverse = (("Up", "Down") if vertical else ("Right", "Left"))
+                if sign < 0: forward, reverse = reverse, forward
+                self.assertEqual(self.sent, [("Input." + forward,), ("Input." + reverse,)])
+
+    def test_short_diagonal_contact_cleans_up(self):
+        self.nav.settings = Settings()
+        self.touch("INICIO", 0); self.now = .02; self.touch("MOVER", 20, 20)
+        self.touch("FIN", 20, 20)
+        self.assertEqual(self.sent, [])
+        self.assertIsNone(self.nav.origin)
+
+    def test_captured_low_pressure_return_only_emits_up(self):
+        self.nav.settings = Settings()
+        samples = [
+            (0, "INICIO", 99, 51, 4), (.012, "MOVER", 96, 46, 3),
+            (.024, "MOVER", 93, 40, 3), (.096, "MOVER", 87, 25, 2),
+            (.117, "MOVER", 88, 24, 3), (.128, "MOVER", 89, 23, 5),
+            (.149, "MOVER", 89, 23, 13), (.160, "MOVER", 89, 24, 16),
+            (.174, "MOVER", 89, 25, 19), (.186, "MOVER", 90, 27, 20),
+            (.209, "MOVER", 90, 29, 22), (.219, "MOVER", 90, 32, 25),
+            (.240, "MOVER", 91, 35, 26), (.251, "MOVER", 92, 38, 27),
+            (.262, "MOVER", 92, 41, 27), (.287, "MOVER", 94, 47, 26),
+            (.299, "MOVER", 95, 52, 22), (.310, "MOVER", 97, 56, 15),
+            (.331, "MOVER", 99, 58, 7), (.342, "MOVER", 100, 60, 3),
+            (.353, "MOVER", 102, 61, 1), (.375, "FIN", 102, 61, 0)]
+        for t, action, x, y, pressure in samples:
+            self.now = t
+            self.nav.touch((action, x, y, pressure, 0, 0))
+        self.assertEqual(self.sent, [("Input.Up",)])
+        self.assertIsNone(self.nav.origin)
+
+    def test_pressure_hysteresis_and_reactivation(self):
+        self.nav.settings = Settings(touch_settle_ms=0, touch_interval_ms=0)
+        for action, y, pressure in [("INICIO", 0, 10), ("MOVER", 18, 4),
+                                    ("MOVER", -20, 3), ("MOVER", -40, 9),
+                                    ("MOVER", -40, 10), ("MOVER", -22, 5)]:
+            self.nav.touch((action, 0, y, pressure, 0, 0))
+        self.assertEqual(self.sent, [("Input.Up",), ("Input.Up",)])
+
+    def test_low_pressure_contact_never_emits_on_release(self):
+        for action, y, pressure in [("INICIO", 50, 4), ("MOVER", 0, 3), ("FIN", 0, 0)]:
+            self.nav.touch((action, 0, y, pressure, 0, 0))
+        self.assertEqual(self.sent, [])
+        self.assertIsNone(self.nav.origin)
+
+    def test_release_mode_uses_last_reliable_position(self):
+        self.nav.settings = Settings(touch_mode="release", touch_settle_ms=0)
+        for action, y, pressure in [("INICIO", 0, 12), ("MOVER", 20, 10),
+                                    ("MOVER", -30, 2), ("FIN", -30, 0)]:
+            self.nav.touch((action, 0, y, pressure, 0, 0))
+        self.assertEqual(self.sent, [("Input.Up",)])
 
     def test_reset_cancels_held_touch_and_repeat(self):
         self.button("PRESIONADO", "ARRIBA"); self.touch("INICIO", 0); self.nav.reset(); self.now=10; self.nav.tick()
@@ -217,13 +422,88 @@ class NavigationTests(unittest.TestCase):
 
 
 class OutputTests(unittest.TestCase):
+    def test_matching_gesture_bindings_hold_until_release(self):
+        from evdev import ecodes as e
+        for name, field in (("ATRAS", "key_back"), ("TV", "key_tv"), ("SIRI", "key_siri")):
+            with self.subTest(name=name):
+                keyboard = Keyboard(Settings(**{field: "KEY_ENTER", field + "_long": "KEY_ENTER"}), ui_factory=FakeDevice)
+                now = [0]
+                keyboard.navigation.clock = lambda: now[0]
+                keyboard.navigation.button("PRESIONADO", name)
+                self.assertEqual(keyboard.ui.events, [(e.EV_KEY, e.KEY_ENTER, 1), "syn"])
+                now[0] = 2; keyboard.navigation.tick()
+                keyboard.navigation.button("PRESIONADO", name)
+                self.assertEqual(len(keyboard.ui.events), 2)
+                keyboard.navigation.button("SOLTADO", name)
+                self.assertEqual(keyboard.ui.events[-2:], [(e.EV_KEY, e.KEY_ENTER, 0), "syn"])
+                self.assertEqual(len(keyboard.ui.events), 4)
+                keyboard.close()
+
+    def test_double_click_prevents_matching_binding_hold(self):
+        for name, field in (("ATRAS", "key_back"), ("TV", "key_tv"), ("SIRI", "key_siri")):
+            with self.subTest(name=name):
+                sent = []; now = [0]
+                nav = Navigation(lambda *args: sent.append(args), Settings(**{
+                    field: "KEY_ENTER", field + "_long": "KEY_ENTER", field + "_double": "KEY_ESC"}), lambda: now[0])
+                nav.button("PRESIONADO", name)
+                self.assertEqual(sent, [])
+                now[0] = .05; nav.button("SOLTADO", name)
+                self.assertEqual(sent, [])
+                now[0] = .4; nav.tick()
+                self.assertEqual(len(sent), 1)
+                self.assertNotIn(sent[0][0], ("Input.HoldDown", "Input.HoldUp"))
+
+    def test_shared_held_key_is_released_only_by_last_button(self):
+        from evdev import ecodes as e
+        keyboard = Keyboard(Settings(key_back="KEY_ENTER", key_back_long="KEY_ENTER"), ui_factory=FakeDevice)
+        nav = keyboard.navigation
+        nav.button("PRESIONADO", "CENTRO"); nav.button("PRESIONADO", "ATRAS")
+        nav.button("SOLTADO", "CENTRO")
+        self.assertEqual(keyboard.ui.events, [(e.EV_KEY, e.KEY_ENTER, 1), "syn"])
+        keyboard.release_all()
+        self.assertEqual(keyboard.ui.events[-2:], [(e.EV_KEY, e.KEY_ENTER, 0), "syn"])
+        self.assertFalse(keyboard.held_codes)
+        self.assertFalse(nav.held_gestures)
+        keyboard.close()
+
+    def test_held_siri_chord_released_on_close(self):
+        from evdev import ecodes as e
+        keyboard = Keyboard(Settings(key_siri="KEY_LEFTCTRL+KEY_B", key_siri_long="KEY_LEFTCTRL+KEY_B"), ui_factory=FakeDevice)
+        keyboard.navigation.button("PRESIONADO", "SIRI")
+        ui = keyboard.ui
+        keyboard.close()
+        self.assertEqual(ui.events, [
+            (e.EV_KEY, e.KEY_LEFTCTRL, 1), "syn", (e.EV_KEY, e.KEY_B, 1), "syn",
+            (e.EV_KEY, e.KEY_B, 0), "syn", (e.EV_KEY, e.KEY_LEFTCTRL, 0), "syn"])
+
+    def test_all_optional_actions_can_be_disabled(self):
+        from evdev import ecodes as e
+        settings = parse_settings("\n".join(f"{key}=NONE" for key in (
+            "KEY_CENTER_LONG", "KEY_BACK_LONG", "KEY_TV_LONG", "KEY_SIRI_LONG",
+            "KEY_BACK_DOUBLE", "KEY_TV_DOUBLE", "KEY_SIRI_DOUBLE")))
+        keyboard = Keyboard(settings, ui_factory=FakeDevice)
+        keyboard.navigation.button("PRESIONADO", "CENTRO")
+        keyboard.navigation.button("SOLTADO", "CENTRO")
+        self.assertEqual(keyboard.ui.events, [
+            (e.EV_KEY, e.KEY_ENTER, 1), "syn", (e.EV_KEY, e.KEY_ENTER, 0), "syn"])
+        keyboard.close()
+
     def test_chord_order_and_capabilities(self):
         from evdev import ecodes as e
         captured = []
         def factory(caps, **kwargs): captured.append(caps); return FakeDevice()
         keyboard = Keyboard(Settings(), ui_factory=factory); keyboard.send("Input.TVLong")
-        self.assertIn(e.KEY_F12, captured[0][e.EV_KEY])
+        self.assertTrue({e.KEY_SPACE, e.KEY_A, e.KEY_Z, e.KEY_F12}.issubset(captured[0][e.EV_KEY]))
         self.assertEqual(keyboard.ui.events, [(e.EV_KEY,e.KEY_LEFTMETA,1),"syn",(e.EV_KEY,e.KEY_D,1),"syn",(e.EV_KEY,e.KEY_D,0),"syn",(e.EV_KEY,e.KEY_LEFTMETA,0),"syn"])
+
+    def test_gesture_binding_emits_configured_chord(self):
+        from evdev import ecodes as e
+        keyboard = Keyboard(Settings(key_back_long="KEY_LEFTCTRL+KEY_B"), ui_factory=FakeDevice)
+        keyboard.send("Input.BackLong")
+        self.assertEqual(keyboard.ui.events, [
+            (e.EV_KEY, e.KEY_LEFTCTRL, 1), "syn", (e.EV_KEY, e.KEY_B, 1), "syn",
+            (e.EV_KEY, e.KEY_B, 0), "syn", (e.EV_KEY, e.KEY_LEFTCTRL, 0), "syn",
+        ])
 
     def test_tap_and_close(self):
         from evdev import ecodes as e
@@ -247,6 +527,8 @@ class SupervisorAndCliTests(unittest.TestCase):
 
     def test_service_unit_escapes_spaces_and_percent(self):
         unit = service_unit("/tmp/a b/siri%remote", "/tmp/a b/config.env")
+        self.assertIn("WorkingDirectory=/tmp/a b", unit)
+        self.assertNotIn('WorkingDirectory="', unit)
         self.assertIn('ExecStart="/tmp/a b/siri%%remote" run --config "/tmp/a b/config.env"', unit)
 
     def test_choose_multiple_and_invalid(self):
@@ -276,6 +558,8 @@ class SupervisorAndCliTests(unittest.TestCase):
             def __init__(self, **kwargs): self.event_handler=None
             def adapter(self): return {}
             def devices(self): return [("/new", {"Address":"AA:BB:CC:DD:EE:FF","Paired":True}, A2540Profile)]
+            def remove(self, path): pass
+            def scan(self, seconds, min_rssi, exclude_paths=()): return self.devices()
             def pair(self,path,agent): return {"Address":"AA:BB:CC:DD:EE:FF","Paired":True,"Bonded":True}
             def connect(self,path,profile): self.event_handler(ButtonEvent(ButtonAction.PRESSED,"ATRAS"))
             def pump(self,n): pass

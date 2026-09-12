@@ -60,10 +60,14 @@ virtual.
 ./siri-remote setup
 ```
 
-El asistente muestra los mandos compatibles que ya están emparejados. Si hay
-varios, podrás elegir cuál utilizar. Si no encuentra ninguno, iniciará una
-búsqueda. Acerca el mando al equipo y mantén pulsados Atrás + Volumen arriba
-durante unos cinco segundos.
+`setup` empieza de cero: elimina el vínculo Bluetooth anterior del mando y
+siempre inicia una búsqueda y un nuevo emparejamiento. Si hay varios mandos
+compatibles vinculados, pregunta cuál olvidar; conserva los demás dispositivos.
+Acerca el mando al equipo y, cuando lo indique, mantén pulsados Atrás + Volumen
+arriba durante unos cinco segundos. Para usar un vínculo existente ejecuta `run`.
+Si el nuevo setup falla, el vínculo eliminado no se restaura: repite el
+emparejamiento. Los ajustes de `config.env` se conservan y la identidad se
+actualiza únicamente después de verificar eventos.
 
 Cuando se establezca la conexión, pulsa un botón cuando el asistente lo indique.
 En cuanto reciba un evento, `setup` guardará la identidad del mando y la
@@ -202,36 +206,66 @@ se resuelve en cada sesión y no se guarda. `config.env` está excluido de Git.
 | `KEY_CENTER` | Centro corto | `KEY_ENTER` |
 | `KEY_CENTER_LONG` | Centro mantenido | `KEY_ENTER` |
 | `KEY_BACK` | Atrás | `KEY_ESC` |
+| `KEY_BACK_LONG` | Atrás largo | `NONE` |
+| `KEY_BACK_DOUBLE` | Atrás doble (opcional) | `NONE` |
 | `KEY_TV` | TV corto | `KEY_HOME` |
 | `KEY_TV_LONG` | TV largo | `KEY_LEFTMETA+KEY_D` |
+| `KEY_TV_DOUBLE` | TV doble (opcional) | `NONE` |
 | `KEY_SIRI` | Siri | `KEY_F12` |
+| `KEY_SIRI_LONG` | Siri largo | `NONE` |
+| `KEY_SIRI_DOUBLE` | Siri doble (opcional) | `NONE` |
 | `KEY_PLAYPAUSE` | Play/Pausa | `KEY_PLAYPAUSE` |
 | `KEY_VOLUMEUP` / `KEY_VOLUMEDOWN` | Volumen | `KEY_VOLUMEUP` / `KEY_VOLUMEDOWN` |
 | `KEY_MUTE` | Silencio | `KEY_MUTE` |
 
 Las asignaciones usan nombres evdev `KEY_*`. Las direcciones se comparten entre
-el aro, su repetición y la superficie táctil. `KEY_TV_LONG` y `KEY_SIRI`
-también admiten combinaciones separadas por `+` o `NONE` para desactivar la
-acción:
+el aro, su repetición y la superficie táctil. `KEY_TV_LONG`, `KEY_SIRI` y las
+acciones largas y dobles también admiten combinaciones separadas por
+`+` o `NONE` para desactivar la acción:
 
 ```ini
 KEY_BACK=KEY_BACKSPACE
+KEY_BACK_LONG=KEY_LEFTALT+KEY_BACKSPACE
 KEY_PLAYPAUSE=KEY_SPACE
 KEY_TV_LONG=KEY_LEFTMETA+KEY_D
 KEY_SIRI=NONE
 ```
 
+Todas las acciones largas y dobles son opcionales: `NONE` las desactiva.
+Con `KEY_CENTER_LONG=NONE`, Centro envía la acción corta al presionar,
+sin esperar al umbral ni repetirla al soltar.
 Si `KEY_CENTER` y `KEY_CENTER_LONG` coinciden, la tecla permanece pulsada desde
 que se presiona Centro hasta que se suelta. La aplicación decide cómo
-interpretar la duración. Si las asignaciones son diferentes, una pulsación
+interpretar la duración: se envía DOWN inmediatamente y UP al soltar.
+En este modo `LONG_PRESS_MS` no interviene; cambiarlo no modifica el tiempo
+que la aplicación exige para interpretar una pulsación larga o abrir un menú.
+Si las asignaciones son diferentes, una pulsación
 corta envía la primera tecla al soltar el botón antes del umbral; una pulsación
 larga mantiene la segunda desde que se alcanza `LONG_PRESS_MS` hasta que se
 suelta. La acción larga no envía también la acción corta.
 
-TV corto actúa al soltar. TV largo envía una sola combinación al alcanzar el
-umbral. Siri actúa una vez al presionar. Win+D, Home, F12 y las teclas
-multimedia tienen el efecto que les asigne el escritorio o la aplicación. El
-botón Siri no activa reconocimiento de voz.
+Atrás, TV y Siri admiten acciones corta, larga y doble opcional. Con las acciones
+larga y doble en `NONE`, la corta se envía al presionar.
+Si la acción corta y larga coinciden y el doble clic está desactivado,
+mantienen la tecla (o combinación) desde que se presiona hasta que se suelta,
+igual que Centro. `LONG_PRESS_MS` no interviene: la aplicación interpreta la duración.
+Con doble clic habilitado se conserva la detección de gestos, incluso si las
+asignaciones corta y larga coinciden.
+Si sólo hay una acción larga diferente configurada, la corta
+se envía al soltar antes de `LONG_PRESS_MS`, sin espera adicional. La larga se
+envía una sola vez al alcanzar ese umbral y no envía también la corta.
+El doble clic se activa individualmente asignando una tecla o combinación a
+`KEY_BACK_DOUBLE`, `KEY_TV_DOUBLE` o `KEY_SIRI_DOUBLE`. Por defecto valen `NONE`.
+Al activarlo, el clic simple de ese botón espera `DOUBLE_CLICK_MS` después de
+soltarlo. Una segunda pulsación dentro de esa ventana, seguida de una suelta
+corta, emite sólo la acción doble. Los otros botones no adquieren esa espera.
+Si la segunda pulsación es larga, se conserva el primer clic simple y se emite
+la acción larga. Con doble clic desactivado, dos clics válidos son dos simples.
+`DOUBLE_CLICK_MS` debe superar el debounce si hay un doble clic habilitado;
+no hay un mínimo fijo de 100 ms.
+Win+D, Home, F12 y las teclas multimedia tienen el efecto que les
+asigne el escritorio o la aplicación. El botón Siri no activa reconocimiento
+de voz.
 
 ### Pulsaciones y repetición
 
@@ -240,7 +274,8 @@ Todos los tiempos están expresados en milisegundos.
 | Opción | Inicial | Efecto |
 |---|---|---|
 | `BUTTON_DEBOUNCE_MS` | `50` | Ignora otra pulsación del mismo botón durante este plazo después de soltarlo; `0` desactiva |
-| `LONG_PRESS_MS` | `300` | Umbral de TV largo y de Centro largo cuando sus teclas difieren |
+| `LONG_PRESS_MS` | `300` | Umbral de Atrás, TV y Siri largos, y de Centro largo cuando sus teclas difieren |
+| `DOUBLE_CLICK_MS` | `300` | Espera tras soltar para distinguir clic simple de doble, sólo en botones con doble clic habilitado |
 | `REPEAT_ENABLED` | `true` | Repite las direcciones del aro al mantenerlas |
 | `REPEAT_DELAY_MS` | `450` | Espera hasta la primera repetición |
 | `REPEAT_INTERVAL_MS` | `120` | Separación entre repeticiones |
@@ -256,20 +291,53 @@ pasos atrasados en una ráfaga.
 | `TOUCH_MODE` | `continuous` | Envía flechas durante el movimiento; `release` envía como máximo una al levantar |
 | `TOUCH_STEP` | `18` | Recorrido mínimo por paso; un valor menor aumenta la sensibilidad |
 | `TOUCH_INTERVAL_MS` | `90` | Separación mínima entre flechas |
-| `TOUCH_SETTLE_MS` | `50` | Tiempo inicial para estabilizar y reanclar el contacto |
+| `TOUCH_SETTLE_MS` | `50` | Espera inicial conservando el recorrido del contacto |
+| `TOUCH_PRESSURE_ON` | `10` | Presión mínima para activar y fijar el origen del gesto |
+| `TOUCH_PRESSURE_OFF` | `4` | Por debajo termina el gesto en la última posición fiable |
 | `TOUCH_AXIS_LOCK` | `true` | Conserva el eje horizontal o vertical durante el contacto continuo |
-| `TOUCH_REVERSE_MARGIN` | `4` | Margen para invertir el sentido desde el extremo alcanzado |
+| `TOUCH_REVERSE_MARGIN` | `4` | Recorrido adicional al paso para invertir desde el extremo alcanzado |
 | `TOUCH_GAIN_X` / `TOUCH_GAIN_Y` | `1.0` | Ganancia del desplazamiento por eje |
 | `TOUCH_INVERT_Y` | `false` | Invierte la dirección vertical |
+
+El filtro de presión descarta el recorrido de roces previos a la activación.
+Al caer por debajo de `TOUCH_PRESSURE_OFF`, finaliza el gesto usando la última
+posición fiable; para retomar exige `TOUCH_PRESSURE_ON` y establece un origen
+nuevo. OFF debe ser menor o igual que ON. Bajá ON si no reconoce gestos suaves;
+ambos en `1` desactivan el filtro. El debug registra `wait=pressure`,
+`pressure_activate` y `pressure_deactivate`.
 
 Con el bloqueo de eje, un movimiento diagonal no genera una dirección hasta que
 un eje predomina un 35 % y supera el umbral. Para cambiar de eje, levanta el
 dedo y vuelve a apoyarlo. La inversión exige al menos
-`max(TOUCH_STEP, TOUCH_REVERSE_MARGIN)` desde el extremo alcanzado; esos valores
-no se suman.
+`TOUCH_STEP + TOUCH_REVERSE_MARGIN` desde el extremo alcanzado. Un pequeño
+retroceso no bloquea un paso pendiente si el desplazamiento neto sigue avanzando.
 
 Un clic cancela el resto del gesto táctil para evitar una acción duplicada. El
-dedo quieto no genera pasos pendientes y no hay inercia al levantarlo.
+dedo quieto no genera pasos pendientes y no hay inercia al levantarlo. Durante
+la espera inicial se conserva el origen: si un gesto breve termina antes de
+emitir su primer paso, se evalúa su desplazamiento neto al soltar y puede emitir
+una única flecha. Los movimientos por debajo del umbral se descartan.
+
+### Debug del touch
+
+Para navegar normalmente y guardar coordenadas y decisiones del touch:
+
+```bash
+./siri-remote run --raw-touch 2>&1 | tee /tmp/siri-touch-debug.log
+```
+
+Ejecutá una sola instancia del mando; si está activo como servicio, detenelo
+antes con `systemctl --user stop siri-remote.service`. Al terminar la captura
+con Ctrl+C, podés volver a iniciarlo con `systemctl --user start siri-remote.service`.
+
+El registro incluye milisegundos, bytes RAW, un número por contacto, coordenadas,
+presión, eje, extremo alcanzado, recorrido de retroceso y umbral de inversión.
+Las líneas `emit=Down reason=reversal` explican una inversión; `continuity_lost`
+marca un informe que interrumpe el seguimiento. `BUTTON` identifica eventos de
+botones físicos. Compartí el tramo desde el `INICIO` anterior al salto hasta el
+`FIN` siguiente, incluyendo los RAW y warnings. `--dry-run` permite registrar
+sin enviar teclas; omitilo para reproducir el problema navegando en pantalla.
+El debug no cambia los umbrales ni la interpretación de los gestos.
 
 ### Opciones de ejecución
 

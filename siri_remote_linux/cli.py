@@ -48,17 +48,51 @@ def setup_command(args, backend_factory=BlueZBackend, input_fn=input, output=pri
         backend.adapter()
         paired = [item for item in backend.devices() if item[1].get("Paired")]
         if paired:
-            selected = choose(paired, input_fn, output)
-        else:
-            output("Mantené Atrás + Volumen arriba durante unos 5 segundos.")
-            candidates = backend.scan(args.seconds, args.min_rssi)
-            selected = choose(candidates, input_fn, output)
+            output("Setup renueva el vínculo Bluetooth desde cero.")
+            old_path, old_props, old_profile = choose(paired, input_fn, output)
+            output(f"Olvidando vínculo anterior {old_profile.stable_identity(old_props)}...")
+            backend.remove(old_path)
+            paired = [item for item in paired if item[0] != old_path]
+        output("Mantené Atrás + Volumen arriba durante unos 5 segundos para un nuevo emparejamiento.")
+        preserved = {item[0] for item in paired}
+        candidates = backend.scan(args.seconds, args.min_rssi, exclude_paths=preserved)
+        selected = choose([item for item in candidates if item[0] not in preserved], input_fn, output)
         path, props, profile_class = selected
         agent = create_agent(backend); agent.register()
-        props = backend.pair(path, agent)
+        try:
+            props = backend.pair(path, agent)
+        except Exception as exc:
+            cause = exc.__cause__ or exc
+            error_name = getattr(cause, "get_dbus_name", lambda: "")()
+            if error_name not in ("org.bluez.Error.Failed",
+                                  "org.freedesktop.DBus.Error.UnknownObject",
+                                  "org.freedesktop.DBus.Error.UnknownInterface",
+                                  "org.bluez.Error.DoesNotExist"):
+                raise
+            # Pair incluye descubrimiento GATT y puede fallar después del vínculo.
+            # Una ruta nueva requiere selección explícita: no inferir identidad
+            # únicamente a partir de proximidad o de que haya un solo candidato.
+            before = {item[0] for item in paired}
+            recovered = [item for item in backend.devices()
+                         if item[1].get("Paired") and item[1].get("Bonded", True)
+                         and (item[0] == path or item[0] not in before)]
+            if not recovered:
+                raise
+            output(f"Pair informó: {cause}")
+            selected = choose(recovered, input_fn, output)
+            new_path, new_props, profile_class = selected
+            if new_path != path:
+                identity = profile_class.stable_identity(new_props)
+                answer = input_fn(f"BlueZ creó el vínculo {identity}. ¿Usar ese mando? [s/N] ").strip().lower()
+                if answer not in ("s", "si", "sí"):
+                    raise RuntimeError("Selección cancelada; no se guardó configuración") from exc
+            path = new_path
+            props = backend.pair(path, agent)
         profile = profile_class(no_touch=args.no_touch)
         received = []
         backend.event_handler = lambda event: received.append(event) if isinstance(event, (ButtonEvent, TouchEvent)) else None
+        output("Vínculo confirmado. Pulsá y soltá un botón para despertar el mando; "
+               "verificando conexión y GATT (hasta 40 s para conectar/resolver servicios).")
         backend.connect(path, profile)
         output("Conexión y GATT verificados. Pulsá un botón para verificar eventos.")
         deadline = time.monotonic() + args.verify_seconds
@@ -149,7 +183,7 @@ def run_command(args):
 def parser():
     result = argparse.ArgumentParser(prog="siri-remote", description="Apple Siri Remote como teclado Linux")
     sub = result.add_subparsers(dest="command", required=True)
-    setup = sub.add_parser("setup", help="emparejar, verificar y guardar identidad"); add_runtime_options(setup)
+    setup = sub.add_parser("setup", help="olvidar el vínculo previo, emparejar desde cero y verificar"); add_runtime_options(setup)
     setup.add_argument("--adapter", default="hci0"); setup.add_argument("--seconds", type=int, default=60)
     setup.add_argument("--min-rssi", type=int, default=-75); setup.add_argument("--verify-seconds", type=int, default=15)
     run = sub.add_parser("run", help="ejecutar el supervisor persistente"); add_runtime_options(run)
@@ -163,7 +197,7 @@ def parser():
 def main(argv=None):
     args = parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if getattr(args, "raw_touch", False) else logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
+                        format="%(asctime)s.%(msecs)03d %(levelname)s %(message)s", datefmt="%H:%M:%S")
     try:
         if args.command == "setup": return setup_command(args)
         if args.command == "run": return run_command(args)
