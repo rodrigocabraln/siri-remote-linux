@@ -1,5 +1,16 @@
 # siri-remote-linux
 
+> **Aviso de reconexión Bluetooth:** existe un
+> [bug del kernel Linux relacionado con el tipo de dirección al reutilizar conexiones LE](https://lists.openwall.net/linux-kernel/2026/09/07/2845)
+> que puede impedir reconectar dispositivos con direcciones privadas, aunque
+> sigan emparejados. Un posible síntoma es `le-connection-abort-by-local`, aunque
+> ese error también puede tener otras causas. Si el problema aparece tras
+> actualizar el kernel, prueba una versión anterior conservando el vínculo,
+> antes de repetir `setup` o borrar emparejamientos. Esperar publicidad nueva
+> desde la aplicación no garantiza evitar el bug. Consulta el enlace para el
+> detalle técnico y el parche propuesto; no se mantiene aquí una lista de
+> versiones afectadas o corregidas.
+
 <p align="center">
   <font color="#7C3AED">
     <strong>PROYECTO PERSONAL, CODESARROLLADO CON IA</strong><br>
