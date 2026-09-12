@@ -44,6 +44,8 @@ class BlueZBackend:
         self.dbus, mainloop, self.GLib = dependencies()
         mainloop(set_as_default=True)
         self.bus = self.dbus.SystemBus(private=True)
+        # Let the supervisor recover instead of letting libdbus call _exit(1).
+        self.bus.set_exit_on_disconnect(False)
         self.context = self.GLib.MainContext.default()
         self.adapter_name = adapter
         self.adapter_path = "/org/bluez/" + adapter
