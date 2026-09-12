@@ -6,6 +6,8 @@ from .events import ButtonEvent, TouchEvent
 
 log = logging.getLogger("siri_remote")
 
+VOLUME_ACTIONS = {"VOLUMEN_ARRIBA": "volumeup", "VOLUMEN_ABAJO": "volumedown"}
+
 
 GESTURE_BUTTONS = {
     "ATRAS": ("Input.Back", "Input.BackLong", "key_back_long", "Input.BackDouble", "key_back_double"),
@@ -93,8 +95,7 @@ class Navigation:
                 else: self.center_start = now
             else:
                 methods = {"ARRIBA": "Up", "ABAJO": "Down", "IZQUIERDA": "Left", "DERECHA": "Right", "ATRAS": "Back"}
-                actions = {"PLAY_PAUSA": "playpause", "VOLUMEN_ARRIBA": "volumeup",
-                           "VOLUMEN_ABAJO": "volumedown", "SILENCIO": "mute"}
+                actions = {"PLAY_PAUSA": "playpause", **VOLUME_ACTIONS, "SILENCIO": "mute"}
                 if name in methods: self.send("Input." + methods[name])
                 elif name in actions: self.send("Input.ExecuteAction", {"action": actions[name]})
         else:
@@ -102,7 +103,7 @@ class Navigation:
         if (name == "CENTRO" and action == "PRESIONADO" and
                 self.settings.key_center == self.settings.key_center_long):
             self.center_long_active = True; self.send("Input.CenterLongDown"); return
-        if name in ("ARRIBA", "ABAJO", "IZQUIERDA", "DERECHA"):
+        if name in ("ARRIBA", "ABAJO", "IZQUIERDA", "DERECHA") or name in VOLUME_ACTIONS:
             if action == "PRESIONADO" and self.settings.repeat_enabled:
                 self.repeat_due[name] = now + self.settings.repeat_delay_ms / 1000
             else: self.repeat_due.pop(name, None)
@@ -156,7 +157,10 @@ class Navigation:
         for name, due in list(self.repeat_due.items()):
             if name not in self.held or not self.settings.repeat_enabled: self.repeat_due.pop(name, None)
             elif now >= due:
-                self.send("Input." + methods[name])
+                if name in VOLUME_ACTIONS:
+                    self.send("Input.ExecuteAction", {"action": VOLUME_ACTIONS[name]})
+                else:
+                    self.send("Input." + methods[name])
                 self.repeat_due[name] = now + self.settings.repeat_interval_ms / 1000
 
     def reset(self):

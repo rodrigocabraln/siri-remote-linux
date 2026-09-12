@@ -293,6 +293,39 @@ class NavigationTests(unittest.TestCase):
         self.button("SOLTADO", "DERECHA"); self.now = 6; self.nav.tick()
         self.assertEqual(self.sent, [("Input.Right",), ("Input.Right",), ("Input.Right",)])
 
+    def test_volume_repeat_timing_and_cancellation(self):
+        for name, action in (("VOLUMEN_ARRIBA", "volumeup"), ("VOLUMEN_ABAJO", "volumedown")):
+            for stop in ("release", "reset", "disable"):
+                with self.subTest(name=name, stop=stop):
+                    self.now = 0; self.sent = []
+                    self.nav = Navigation(lambda *x: self.sent.append(x),
+                        Settings(repeat_delay_ms=500, repeat_interval_ms=250), lambda: self.now)
+                    expected = ("Input.ExecuteAction", {"action": action})
+                    self.button("PRESIONADO", name)
+                    self.now = .49; self.nav.tick()
+                    self.assertEqual(self.sent, [expected])
+                    self.now = .5; self.nav.tick()
+                    self.assertEqual(self.sent, [expected] * 2)
+                    self.now = .74; self.nav.tick()
+                    self.assertEqual(self.sent, [expected] * 2)
+                    self.now = .75; self.nav.tick()
+                    self.now = 5; self.nav.tick()
+                    self.assertEqual(self.sent, [expected] * 4)
+                    if stop == "release": self.button("SOLTADO", name)
+                    elif stop == "reset": self.nav.reset()
+                    else: self.nav.settings = Settings(repeat_enabled=False)
+                    self.now = 6; self.nav.tick()
+                    self.assertEqual(self.sent, [expected] * 4)
+                    self.assertFalse(self.nav.repeat_due)
+
+    def test_volume_repeat_disabled(self):
+        self.nav.settings = Settings(repeat_enabled=False)
+        self.button("PRESIONADO", "VOLUMEN_ARRIBA")
+        self.button("PRESIONADO", "VOLUMEN_ABAJO")
+        self.now = 5; self.nav.tick()
+        self.assertEqual(self.sent, [("Input.ExecuteAction", {"action": "volumeup"}),
+                                     ("Input.ExecuteAction", {"action": "volumedown"})])
+
     def test_continuous_threshold_interval(self):
         self.touch("INICIO", 0); self.touch("MOVER", 9); self.now = .05; self.touch("MOVER", 20)
         self.now = .2; self.touch("MOVER", 21); self.touch("FIN", 21)

@@ -296,7 +296,7 @@ Todos los tiempos están expresados en milisegundos.
 | `BUTTON_DEBOUNCE_MS` | `50` | Ignora otra pulsación del mismo botón durante este plazo después de soltarlo; `0` desactiva |
 | `LONG_PRESS_MS` | `300` | Umbral de Atrás, TV y Siri largos, y de Centro largo cuando sus teclas difieren |
 | `DOUBLE_CLICK_MS` | `300` | Espera tras soltar para distinguir clic simple de doble, sólo en botones con doble clic habilitado |
-| `REPEAT_ENABLED` | `true` | Repite las direcciones del aro al mantenerlas |
+| `REPEAT_ENABLED` | `true` | Repite las direcciones del aro y volumen arriba/abajo al mantenerlos |
 | `REPEAT_DELAY_MS` | `450` | Espera hasta la primera repetición |
 | `REPEAT_INTERVAL_MS` | `120` | Separación entre repeticiones |
 
