@@ -89,11 +89,15 @@ class Supervisor:
                             if not self.stopping: self.output.navigation.tick()
                             return not self.stopping
                         timer = backend.GLib.timeout_add(10, tick)
+                    next_connection_check = 0
                     while not self.stopping:
                         backend.pump(0.05)
                         if timer is None: self.output.navigation.tick()
                         if backend.disconnect_event: raise backend.disconnect_event.pop(0)
-                        if not backend.connected(): raise Disconnected("El mando se desconectó")
+                        now = time.monotonic()
+                        if now >= next_connection_check:
+                            if not backend.connected(): raise Disconnected("El mando se desconectó")
+                            next_connection_check = now + 1
                         if self.listen_seconds and time.monotonic() - started >= self.listen_seconds:
                             self.stopping = True
                 except Exception as exc:

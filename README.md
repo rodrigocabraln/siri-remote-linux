@@ -478,9 +478,10 @@ temporizadores comparten un contexto GLib, con un ciclo de navegación de 10 ms.
 
 `run` crea un único teclado virtual. Si el mando entra en reposo, BlueZ se
 reinicia o el adaptador desaparece, el programa libera las teclas, descarta las
-suscripciones y reconstruye la sesión. Los reintentos esperan 1, 2, 5 y 10
-segundos. Después mantienen un máximo de 10 segundos y vuelven a comenzar en 1
-segundo tras una activación correcta.
+suscripciones y reconstruye la sesión. La desconexión se atiende por la señal
+de BlueZ y se comprueba además por D-Bus una vez por segundo como respaldo.
+Los reintentos esperan 1, 2, 5 y 10 segundos. Después mantienen un máximo de
+10 segundos y vuelven a comenzar en 1 segundo tras una activación correcta.
 
 Solo está implementado el A2540. No hay audio, reconocimiento de voz, cursor ni
 multitouch. El botón de encendido se decodifica, pero no tiene una tecla de
